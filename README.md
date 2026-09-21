@@ -226,7 +226,7 @@ codexctl doctor --json
 ## Shell Completions
 
 ```bash
-source <(codexctl completions bash)
+source <(codexctl completions bash --print)
 ```
 
 ---
@@ -245,20 +245,27 @@ docker run -it --rm \
 
 ## Configuration
 
-Configuration directory: `~/.config/codexctl/`
+Profiles are stored in the platform's application data directory by default.
+Use `codexctl status` to inspect the resolved paths, or choose a profile directory:
 
-```toml
-# ~/.config/codexctl/config.toml
-[default]
-cli = "codex"  # Default CLI to manage
-
-[auto_switch]
-enabled = true
-threshold = 80  # Switch when quota below 80%
-
-[encryption]
-default_passphrase = false  # Always prompt for passphrase
+```bash
+codexctl --config-dir /path/to/profiles list
+# Equivalent environment override:
+export CODEXCTL_DIR=/path/to/profiles
 ```
+
+`CODEXCTL_PASSPHRASE` supplies the encryption passphrase and `CODEXCTL_QUIET`
+controls quiet output. There is no `codexctl` configuration-file parser.
+
+Profile names cannot use internal names (`backups`, dot-prefixed names) or
+command aliases (`auto`, `-`). Save and import prepare replacements before
+replacing an existing profile. Named backups refuse an existing destination;
+automatic backups receive unique names.
+
+`codexctl run` restores auth after the child exits, propagates its exit code, and
+reports restoration failures even in quiet mode. Abrupt termination of
+`codexctl` itself and simultaneous writers to the same auth file are not covered
+by this restoration guarantee.
 
 ---
 

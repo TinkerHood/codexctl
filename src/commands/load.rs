@@ -271,7 +271,7 @@ async fn auto_switch(
         anyhow::bail!("No profiles with valid usage information found");
     }
 
-    profiles_with_usage.sort_by(|a, b| b.2.cmp(&a.2));
+    profiles_with_usage.sort_by_key(|profile| std::cmp::Reverse(profile.2));
 
     if !quiet {
         println!("{}", "🔄 Auto Profile Switcher".cyan().bold());

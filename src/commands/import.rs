@@ -1,4 +1,5 @@
 use crate::utils::config::Config;
+use crate::utils::transaction::ProfileTransaction;
 use crate::utils::validation::ProfileName;
 use anyhow::{Context as _, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -25,20 +26,9 @@ pub async fn execute(config: Config, name: String, data: String, quiet: bool) ->
             }
             return Ok(());
         }
-
-        tokio::fs::remove_dir_all(&profile_dir).await?;
     }
 
-    // Decode base64
-    let decoded = STANDARD
-        .decode(&data)
-        .with_context(|| "Failed to decode base64 data")?;
-
-    // Decompress (gzip)
-    let decompressed = decompress(&decoded)?;
-
-    // Parse as tarball and extract
-    extract_tarball(&decompressed, &profile_dir).await?;
+    import_profile(&data, &profile_dir).await?;
 
     if !quiet {
         println!(
@@ -48,6 +38,29 @@ pub async fn execute(config: Config, name: String, data: String, quiet: bool) ->
         );
         println!("  {}: {}", "Location".dimmed(), profile_dir.display());
     }
+
+    Ok(())
+}
+
+async fn import_profile(data: &str, profile_dir: &Path) -> Result<()> {
+    // Decode and extract completely before replacing an existing profile.
+    let decoded = STANDARD
+        .decode(data)
+        .with_context(|| "Failed to decode base64 data")?;
+
+    // Decompress (gzip)
+    let decompressed = decompress(&decoded)?;
+
+    // Parse as tarball and extract
+    let transaction = ProfileTransaction::new(profile_dir)?;
+    extract_tarball(&decompressed, &transaction.staging_dir()).await?;
+    let auth_path = transaction.staging_dir().join("auth.json");
+    let auth = std::fs::symlink_metadata(&auth_path)
+        .context("Imported profile must contain a regular auth.json file")?;
+    if !auth.is_file() {
+        anyhow::bail!("Imported profile must contain a regular auth.json file");
+    }
+    transaction.commit()?;
 
     Ok(())
 }
@@ -88,4 +101,39 @@ async fn extract_tarball(data: &[u8], dest: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[tokio::test]
+    async fn invalid_import_preserves_existing_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("work");
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(profile.join("auth.json"), "original").unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(b"not a tar archive").unwrap();
+        let mut empty_tar = tar::Builder::new(Vec::new());
+        empty_tar.finish().unwrap();
+        let mut empty_gzip =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        empty_gzip
+            .write_all(&empty_tar.into_inner().unwrap())
+            .unwrap();
+        for invalid in [
+            "!invalid-base64!".to_string(),
+            STANDARD.encode(gzip.finish().unwrap()),
+            STANDARD.encode(empty_gzip.finish().unwrap()),
+        ] {
+            assert!(import_profile(&invalid, &profile).await.is_err());
+            assert_eq!(
+                std::fs::read(profile.join("auth.json")).unwrap(),
+                b"original"
+            );
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
 }

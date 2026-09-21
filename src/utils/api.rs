@@ -79,10 +79,10 @@ pub async fn fetch_quota(api_key: &str) -> Result<RealTimeQuota> {
         .get("hard_limit_usd")
         .and_then(Value::as_f64)
         .map(|v| (v * 100.0) as u64)
-        .map_or(0, std::convert::identity);
+        .unwrap_or(0);
 
     // Fetch usage data
-    let usage = fetch_usage(api_key).await.map_or(0, std::convert::identity);
+    let usage = fetch_usage(api_key).await.unwrap_or(0);
     let remaining = quota_limit.saturating_sub(usage);
     #[allow(clippy::cast_precision_loss)]
     let percent_used = if quota_limit > 0 {
@@ -144,7 +144,7 @@ async fn fetch_usage(api_key: &str) -> Result<u64> {
         .get("total_usage")
         .and_then(Value::as_f64)
         .map(|v| (v * 100.0) as u64) // Convert to cents
-        .map_or(0, std::convert::identity);
+        .unwrap_or(0);
 
     Ok(total_usage)
 }

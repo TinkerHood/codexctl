@@ -42,7 +42,7 @@ pub async fn execute(
     }
 
     // Sort by timestamp (newest first)
-    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
 
     // Filter by profile if specified
     if let Some(ref profile) = profile_filter {

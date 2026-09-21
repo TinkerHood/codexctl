@@ -1,21 +1,15 @@
 #!/bin/sh
 # CodexCTL Pre-commit Hook
-# Run: ./pre-commit to install, or add to your git config
+# Run ./pre-commit, or copy this file to .git/hooks/pre-commit.
+
+set -eu
 
 echo "Running pre-commit checks..."
 
-# Check formatting
-if ! cargo fmt --check >/dev/null 2>&1; then
-    echo "Formatting errors detected. Running cargo fmt..."
-    cargo fmt
-fi
-
-# Check clippy
-if ! cargo clippy -- -D warnings >/dev/null 2>&1; then
-    echo "Clippy warnings/errors detected."
-    cargo clippy -- -D warnings
-    exit 1
-fi
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features --all-targets
+pnpm --dir npm exec node --test test/launcher.test.js
 
 echo "Pre-commit checks passed."
 exit 0

@@ -10,6 +10,16 @@ All notable changes to this project will be documented in this file.
 - Refreshed the Rust lockfile to current compatible transitive versions.
 - Updated release automation to the current `softprops/action-gh-release@v3` action and aligned the npm audit workflow to Node.js 24.
 
+### Fixed
+
+- Preserve saved profiles when replacement preparation or installation fails.
+- Clean up temporary credential writes on failure and create new files privately.
+- Give automatic backups unique names and reject unsafe or reused named backups.
+- Propagate child failures and report auth restoration errors from `run`.
+- Resolve launcher binaries through Node's module resolution, including pnpm layouts, and handle spawn errors and signal exits.
+- Update vulnerable dependencies, remove obsolete audit exceptions and unused dependencies, and verify compatibility with profiles encrypted by age 0.11.
+- Remove unused downloader scripts, keep test-only profile helpers out of production, and align local checks with CI.
+
 ## [0.10.0] - 2026-04-13
 
 ### Changed

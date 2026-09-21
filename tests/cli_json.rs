@@ -7,11 +7,9 @@ use assert_cmd::Command;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
 use serde_json::Value;
-use serial_test::serial;
 use tempfile::TempDir;
 
 #[test]
-#[serial]
 fn status_json_reports_auth_mode_capabilities() {
     let fixture = CliFixture::new();
     fixture.install_fake_codex();
@@ -36,7 +34,6 @@ fn status_json_reports_auth_mode_capabilities() {
 }
 
 #[test]
-#[serial]
 fn usage_all_json_includes_mixed_profile_modes() {
     let fixture = CliFixture::new();
     write_profile(
@@ -78,7 +75,6 @@ fn usage_all_json_includes_mixed_profile_modes() {
 }
 
 #[test]
-#[serial]
 fn verify_json_distinguishes_locked_profiles() {
     let fixture = CliFixture::new();
     fixture.write_live_auth(r#"{"api_key":"sk-valid"}"#);
@@ -116,7 +112,7 @@ fn verify_json_distinguishes_locked_profiles() {
 }
 
 struct CliFixture {
-    temp: TempDir,
+    _temp: TempDir,
     home_dir: PathBuf,
     config_dir: PathBuf,
     bin_dir: PathBuf,
@@ -137,7 +133,7 @@ impl CliFixture {
         let path = format!("{}:{existing_path}", bin_dir.display());
 
         Self {
-            temp,
+            _temp: temp,
             home_dir,
             config_dir,
             bin_dir,
@@ -149,6 +145,8 @@ impl CliFixture {
         let mut cmd = Command::cargo_bin("codexctl").unwrap();
         cmd.env("HOME", &self.home_dir)
             .env("CODEXCTL_DIR", &self.config_dir)
+            .env_remove("CODEXCTL_PASSPHRASE")
+            .env_remove("CODEXCTL_QUIET")
             .env("PATH", &self.path);
         cmd
     }
@@ -174,10 +172,165 @@ impl CliFixture {
     }
 }
 
-impl Drop for CliFixture {
-    fn drop(&mut self) {
-        let _ = &self.temp;
-    }
+#[test]
+fn save_without_live_auth_preserves_existing_profile() {
+    let fixture = CliFixture::new();
+    let profile = fixture.config_dir().join("work");
+    write_profile(&profile, &serde_json::json!({"api_key":"saved"}), None);
+    let original = fs::read(profile.join("auth.json")).unwrap();
+    fixture
+        .command()
+        .args(["save", "work", "--force"])
+        .assert()
+        .failure();
+    assert_eq!(fs::read(profile.join("auth.json")).unwrap(), original);
+}
+
+#[test]
+fn save_replaces_complete_profile_and_removes_stale_files() {
+    let fixture = CliFixture::new();
+    fixture.write_live_auth(r#"{"api_key":"replacement"}"#);
+    let profile = fixture.config_dir().join("work");
+    write_profile(&profile, &serde_json::json!({"api_key":"old"}), None);
+    fs::write(profile.join("stale"), "old").unwrap();
+    fixture
+        .command()
+        .args(["--quiet", "save", "work", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(profile.join("auth.json")).unwrap(),
+        br#"{"api_key":"replacement"}"#
+    );
+    assert!(!profile.join("stale").exists());
+    assert!(profile.join("profile.json").is_file());
+}
+
+#[test]
+fn backup_rejects_traversal_and_existing_destinations() {
+    let fixture = CliFixture::new();
+    fixture.write_live_auth(r#"{"api_key":"original"}"#);
+    fixture
+        .command()
+        .args(["backup", "--name", "../escape"])
+        .assert()
+        .failure();
+    assert!(!fixture.config_dir().join("escape").exists());
+    fixture
+        .command()
+        .args(["backup", "--name", "snapshot"])
+        .assert()
+        .success();
+    fixture.write_live_auth(r#"{"api_key":"replacement"}"#);
+    fixture
+        .command()
+        .args(["backup", "--name", "snapshot"])
+        .assert()
+        .failure();
+    assert_eq!(
+        fs::read(fixture.config_dir().join("backups/snapshot/auth.json")).unwrap(),
+        br#"{"api_key":"original"}"#
+    );
+}
+
+#[test]
+fn profile_names_cannot_overwrite_backup_storage() {
+    let fixture = CliFixture::new();
+    fixture.write_live_auth(r#"{"api_key":"original"}"#);
+    fixture
+        .command()
+        .args(["save", "backups", "--force"])
+        .assert()
+        .failure();
+    assert!(fixture.config_dir().join("backups").is_dir());
+    assert!(!fixture.config_dir().join("backups/auth.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn run_propagates_child_failure_and_restores_auth() {
+    let fixture = CliFixture::new();
+    write_profile(
+        &fixture.config_dir().join("work"),
+        &serde_json::json!({"api_key":"saved"}),
+        None,
+    );
+    fixture.write_live_auth(r#"{"api_key":"original"}"#);
+    fixture
+        .command()
+        .args([
+            "--quiet",
+            "run",
+            "--profile",
+            "work",
+            "--",
+            "sh",
+            "-c",
+            "exit 23",
+        ])
+        .assert()
+        .code(23);
+    assert_eq!(
+        fs::read(fixture.home_dir.join(".codex/auth.json")).unwrap(),
+        br#"{"api_key":"original"}"#
+    );
+}
+
+#[test]
+fn run_restores_auth_when_command_cannot_start() {
+    let fixture = CliFixture::new();
+    write_profile(
+        &fixture.config_dir().join("work"),
+        &serde_json::json!({"api_key":"saved"}),
+        None,
+    );
+    fixture.write_live_auth(r#"{"api_key":"original"}"#);
+    fixture
+        .command()
+        .args([
+            "--quiet",
+            "run",
+            "--profile",
+            "work",
+            "--",
+            "codexctl-nonexistent-test-command",
+        ])
+        .assert()
+        .failure();
+    assert_eq!(
+        fs::read(fixture.home_dir.join(".codex/auth.json")).unwrap(),
+        br#"{"api_key":"original"}"#
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_reports_restore_failure_even_in_quiet_mode() {
+    let fixture = CliFixture::new();
+    write_profile(
+        &fixture.config_dir().join("work"),
+        &serde_json::json!({"api_key":"saved"}),
+        None,
+    );
+    fixture.write_live_auth(r#"{"api_key":"original"}"#);
+    let result = fixture
+        .command()
+        .args([
+            "--quiet",
+            "run",
+            "--profile",
+            "work",
+            "--",
+            "sh",
+            "-c",
+            "rm -- \"$HOME/.codex/auth.json\" && mkdir -- \"$HOME/.codex/auth.json\"",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&result).contains("Could not restore original auth"));
 }
 
 fn write_profile(profile_dir: &Path, auth_json: &Value, meta_json: Option<Value>) {

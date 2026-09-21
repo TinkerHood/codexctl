@@ -309,7 +309,20 @@ async fn main() -> Result<()> {
             passphrase,
             command,
         } => {
-            run::execute(config, profile, passphrase, command, cli.quiet).await?;
+            let status = run::execute(config, profile, passphrase, command, cli.quiet).await?;
+            if !status.success() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt as _;
+                    std::process::exit(
+                        status
+                            .code()
+                            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)),
+                    );
+                }
+                #[cfg(not(unix))]
+                std::process::exit(status.code().unwrap_or(1));
+            }
         }
         Commands::Env {
             profile,

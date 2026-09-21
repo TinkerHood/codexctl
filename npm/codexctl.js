@@ -7,12 +7,10 @@
  * in node_modules/@codexctl/{platform}/bin/
  */
 
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
-const { spawn } = require('child_process');
-
 'use strict';
+
+const os = require('os');
+const { spawn } = require('child_process');
 
 const PLATFORMS = {
   'linux-x64': '@codexctl/linux-x64',
@@ -39,13 +37,13 @@ if (!platformPackage) {
   process.exit(1);
 }
 
-const binDir = path.join(__dirname, '..', platformPackage, 'bin');
 const isWindows = os.platform() === 'win32';
 const binaryName = isWindows ? 'codexctl.exe' : 'codexctl';
-const binaryPath = path.join(binDir, binaryName);
-
-if (!fs.existsSync(binaryPath)) {
-  console.error(`codexctl binary not found at: ${binaryPath}`);
+let binaryPath;
+try {
+  binaryPath = require.resolve(`${platformPackage}/bin/${binaryName}`);
+} catch (error) {
+  console.error(`codexctl binary not found in ${platformPackage}: ${error.message}`);
   console.error('Reinstall package to fetch the correct optional dependency for this platform.');
   process.exit(1);
 }
@@ -55,4 +53,15 @@ const child = spawn(binaryPath, process.argv.slice(2), {
   windowsHide: true 
 });
 
-child.on('exit', (code) => process.exit(code ?? 0));
+child.on('error', (error) => {
+  console.error(`Failed to start codexctl: ${error.message}`);
+  process.exitCode = 1;
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+  } else {
+    process.exitCode = code ?? 1;
+  }
+});

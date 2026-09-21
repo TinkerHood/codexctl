@@ -1,7 +1,0 @@
-[advisories]
-ignore = [
-  # Transitive through age-core -> age.
-  # No patched release is available upstream as of 2026-04-11.
-  # Re-evaluate on each age update.
-  "RUSTSEC-2026-0097",
-]

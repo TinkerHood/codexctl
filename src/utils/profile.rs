@@ -1,5 +1,7 @@
+#[cfg(test)]
 use std::path::Path;
 
+#[cfg(test)]
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -45,13 +47,13 @@ impl ProfileMeta {
 
 /// Full profile data including metadata and file list
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[allow(dead_code)]
+#[cfg(test)]
 pub struct Profile {
     pub meta: ProfileMeta,
     pub files: std::collections::HashMap<String, Vec<u8>>, // filename -> content
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl Profile {
     #[must_use]
     pub fn new(name: String, email: Option<String>, description: Option<String>) -> Self {

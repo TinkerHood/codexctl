@@ -39,3 +39,6 @@ lcov.info
 
 # Local data (user-specific)
 /.local/
+
+# JavaScript dependencies
+node_modules/

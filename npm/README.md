@@ -36,7 +36,8 @@ codexctl list
 
 ## Binary Package
 
-This npm package downloads pre-built binaries from GitHub Releases on install.
+This package uses platform-specific optional dependencies containing pre-built
+binaries. Keep optional dependencies enabled when installing it.
 
 Supported platforms:
 - Linux (x86_64, arm64)

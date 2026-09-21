@@ -78,6 +78,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decrypts_profile_created_with_age_0_11() {
+        use base64::Engine as _;
+        // Produced by codexctl with age 0.11.3 using synthetic credentials.
+        let encrypted = base64::engine::general_purpose::STANDARD
+            .decode(include_str!("../../tests/fixtures/age-0.11-auth.b64").trim())
+            .unwrap();
+        let decrypted = decrypt(&encrypted, Some(&"fixture-passphrase".to_string())).unwrap();
+        assert_eq!(decrypted, br#"{"api_key":"test-legacy-fixture"}"#);
+    }
+
+    #[test]
     fn test_no_passphrase_no_encryption() {
         let plaintext = b"hello world";
         let encrypted = encrypt(plaintext, None).unwrap();

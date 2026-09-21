@@ -24,7 +24,6 @@ clap_complete = "4.6"
 tokio = { version = "1.52", features = ["full", "tracing"] }
 
 # Serialization
-toml = "1.1.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
@@ -42,7 +41,6 @@ chrono = { version = "0.4", features = ["serde", "now"] }
 colored = "3.1"
 indicatif = "0.18"
 dialoguer = "0.12"
-console = "0.16"
 
 # File operations
 walkdir = "2.5"
@@ -58,9 +56,6 @@ base64 = "0.22"
 # Version parsing for migrations
 semver = { version = "1.0", features = ["serde"] }
 
-# Random number generation (used by transaction module)
-rand = "0.10.1"
-
 # Utilities
 which = "8.0"
 
@@ -69,13 +64,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "json"] }
 
 # Tables
-prettytable-rs = "0.10"
+prettytable = { package = "prettytable-rs", version = "0.10" }
 
 # HTTP client for OpenAI API
 reqwest = { version = "0.13", features = ["json", "rustls", "stream"] }
 
 # Encryption
-age = { version = "0.11" }
+age = { version = "0.12" }
 secrecy = "0.10"
 
 [features]
@@ -85,11 +80,7 @@ full = ["encryption"]
 
 [dev-dependencies]
 assert_cmd = "2.2"
-predicates = "3.1"
 tempfile = "3.27"
-serial_test = "3.4"
-criterion = { version = "0.8", features = ["async_tokio"] }
-mockall = "0.14"
 
 [profile.release]
 opt-level = 3

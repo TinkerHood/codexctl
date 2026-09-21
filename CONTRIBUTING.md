@@ -13,9 +13,15 @@ Clone and validate locally:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features --all-targets
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features --all-targets
+pnpm --dir npm exec node --test test/launcher.test.js
+cargo build --release --locked
 ```
+
+`./pre-commit` runs formatting, lint, Rust tests, and launcher tests without
+rewriting files. Install `cargo-audit` and `cargo-machete` for dependency checks:
+`cargo audit --deny warnings` and `cargo machete`.
 
 ## Contribution Guidelines
 

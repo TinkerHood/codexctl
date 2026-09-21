@@ -30,3 +30,17 @@ jobs:
 
       - name: Build smoke check
         run: cargo build --release --locked
+
+  launcher:
+    name: JavaScript launcher
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test launcher
+        run: node --test npm/test/launcher.test.js

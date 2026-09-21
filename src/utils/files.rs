@@ -1,6 +1,5 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use walkdir::WalkDir;
@@ -57,10 +56,8 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         let _ = std::fs::set_permissions(dst, metadata.permissions());
     }
 
-    for entry in WalkDir::new(src)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-    {
+    for entry in WalkDir::new(src) {
+        let entry = entry.with_context(|| format!("Failed to read {}", src.display()))?;
         let path = entry.path();
         let Ok(relative) = path.strip_prefix(src) else {
             continue;
@@ -109,9 +106,11 @@ pub fn create_auth_backup(codex_dir: &Path, backup_dir: &Path) -> Result<Option<
     })?;
 
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let backup_path = backup_dir.join(format!("auth_backup_{timestamp}"));
-    std::fs::create_dir_all(&backup_path)
-        .with_context(|| format!("Failed to create backup path: {}", backup_path.display()))?;
+    let backup = tempfile::Builder::new()
+        .prefix(&format!("auth_backup_{timestamp}_"))
+        .tempdir_in(backup_dir)
+        .context("Failed to create auth backup directory")?;
+    let backup_path = backup.path();
 
     let backup_auth_path = backup_path.join("auth.json");
     std::fs::copy(&auth_path, &backup_auth_path).with_context(|| {
@@ -125,7 +124,7 @@ pub fn create_auth_backup(codex_dir: &Path, backup_dir: &Path) -> Result<Option<
         let _ = std::fs::set_permissions(&backup_auth_path, metadata.permissions());
     }
 
-    Ok(Some(backup_path))
+    Ok(Some(backup.keep()))
 }
 
 /// Write bytes to an existing path while preserving existing filesystem permissions.
@@ -136,61 +135,39 @@ pub fn create_auth_backup(codex_dir: &Path, backup_dir: &Path) -> Result<Option<
 ///
 /// Returns an error if write, rename, or permission operations fail.
 pub fn write_bytes_preserve_permissions(path: &Path, data: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)
         .with_context(|| format!("Failed to create parent directory: {}", parent.display()))?;
 
-    let existing_permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
-    let temp_path = unique_temp_path(parent, ".codexctl_write");
-
-    let mut file = std::fs::File::create(&temp_path)
-        .with_context(|| format!("Failed to create temp file: {}", temp_path.display()))?;
-    file.write_all(data)
-        .with_context(|| format!("Failed to write temp file: {}", temp_path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("Failed to sync temp file: {}", temp_path.display()))?;
-    drop(file);
+    let existing_permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to inspect {}", path.display()));
+        }
+    };
+    // NamedTempFile creates private files and removes them on every error path.
+    let mut file = tempfile::Builder::new()
+        .prefix(".codexctl_write_")
+        .tempfile_in(parent)
+        .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
+    file.write_all(data).context("Failed to write temp file")?;
 
     if let Some(perms) = existing_permissions {
-        std::fs::set_permissions(&temp_path, perms).with_context(|| {
-            format!(
-                "Failed to preserve permissions for temp file: {}",
-                temp_path.display()
-            )
-        })?;
+        file.as_file()
+            .set_permissions(perms)
+            .context("Failed to preserve file permissions")?;
     }
-
-    #[cfg(windows)]
-    if path.exists() {
-        std::fs::remove_file(path)
-            .with_context(|| format!("Failed to remove existing file: {}", path.display()))?;
-    }
-
-    std::fs::rename(&temp_path, path).with_context(|| {
-        format!(
-            "Failed to atomically replace {} with {}",
-            path.display(),
-            temp_path.display()
-        )
-    })?;
+    file.as_file()
+        .sync_all()
+        .context("Failed to sync temp file")?;
+    file.persist(path)
+        .with_context(|| format!("Failed to atomically replace {}", path.display()))?;
 
     Ok(())
-}
-
-fn unique_temp_path(parent: &Path, prefix: &str) -> PathBuf {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let rand_suffix: u64 = rand::random::<u64>();
-    parent.join(format!("{prefix}_{ts}_{rand_suffix:016x}"))
-}
-
-/// Check if codex CLI is installed
-/// Reserved for future use with --doctor detailed mode
-#[must_use]
-#[allow(dead_code)]
-pub fn check_codex_installed() -> bool {
-    which::which("codex").is_ok()
 }
 
 /// Get critical files to sync.
@@ -290,10 +267,49 @@ mod tests {
     }
 
     #[test]
-    fn test_check_codex_installed() {
-        // This is a simple smoke test - can't guarantee codex is/isn't installed
-        let _result = check_codex_installed();
-        // Result will be true or false depending on system
+    fn failed_write_cleans_up_temporary_file() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("existing-directory");
+        std::fs::create_dir(&target).unwrap();
+        assert!(write_bytes_preserve_permissions(&target, b"secret").is_err());
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn successive_backups_preserve_both_versions() {
+        let source = TempDir::new().unwrap();
+        let backups = TempDir::new().unwrap();
+        std::fs::write(source.path().join("auth.json"), "first").unwrap();
+        let first = create_auth_backup(source.path(), backups.path())
+            .unwrap()
+            .unwrap();
+        std::fs::write(source.path().join("auth.json"), "second").unwrap();
+        let second = create_auth_backup(source.path(), backups.path())
+            .unwrap()
+            .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(first.join("auth.json")).unwrap(), b"first");
+        assert_eq!(std::fs::read(second.join("auth.json")).unwrap(), b"second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.json");
+        write_bytes_preserve_permissions(&path, b"secret").unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn recursive_copy_reports_missing_source() {
+        let dir = TempDir::new().unwrap();
+        assert!(copy_dir_recursive(&dir.path().join("missing"), &dir.path().join("copy")).is_err());
     }
 
     #[test]

@@ -19,6 +19,9 @@
   "bin": {
     "codexctl": "./codexctl.js"
   },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "optionalDependencies": {
     "@codexctl/linux-x64": "^0.10.0",
     "@codexctl/linux-arm64": "^0.10.0",

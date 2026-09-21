@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 /// - Empty strings
 /// - Path separators (`/`, `\`)
 /// - Traversal sequences (`..`)
-/// - Reserved names (`.`)
+/// - Internal directories and command aliases (`backups`, `auto`, `-`, dot-prefixed names)
 /// - Control characters (ASCII < 0x20 or DEL 0x7F)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProfileName(String);
@@ -31,8 +31,9 @@ fn validate(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("Profile name cannot be empty");
     }
-    if name == "." {
-        bail!("Profile name '.' is reserved");
+    if name.starts_with('.') || name.eq_ignore_ascii_case("backups") || matches!(name, "auto" | "-")
+    {
+        bail!("Profile name '{name}' is reserved");
     }
     if name.contains("..") {
         bail!("Profile name must not contain traversal sequences '..'");
@@ -120,6 +121,24 @@ mod tests {
     #[test]
     fn rejects_reserved_dot() {
         assert!(ProfileName::try_from(".").is_err());
+    }
+
+    #[test]
+    fn rejects_internal_names_and_command_aliases() {
+        for name in [
+            "backups",
+            "Backups",
+            ".current_profile",
+            ".codexctl_profile_staging",
+            "auto",
+            "-",
+        ] {
+            assert!(
+                ProfileName::try_from(name).is_err(),
+                "accepted reserved name {name}"
+            );
+        }
+        assert!(ProfileName::try_from("Auto").is_ok());
     }
 
     #[test]

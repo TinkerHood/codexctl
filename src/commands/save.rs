@@ -4,6 +4,7 @@ use crate::utils::files::{
     copy_profile_files, get_critical_files, write_bytes_preserve_permissions,
 };
 use crate::utils::profile::ProfileMeta;
+use crate::utils::transaction::ProfileTransaction;
 use crate::utils::validation::ProfileName;
 use anyhow::{Context as _, Result};
 use colored::Colorize as _;
@@ -30,6 +31,10 @@ pub async fn execute(
         );
     }
 
+    if !codex_dir.join("auth.json").is_file() {
+        anyhow::bail!("Codex directory does not contain auth.json; existing profile preserved");
+    }
+
     if profile_dir.exists() && !force {
         let confirm = dialoguer::Confirm::new()
             .with_prompt(format!(
@@ -46,11 +51,8 @@ pub async fn execute(
             return Ok(());
         }
     }
-    if profile_dir.exists() {
-        tokio::fs::remove_dir_all(&profile_dir)
-            .await
-            .with_context(|| format!("Failed to remove existing profile '{}'", name))?;
-    }
+    let transaction = ProfileTransaction::new(&profile_dir)?;
+    let staging_dir = transaction.staging_dir();
 
     // Create progress bar with modern styling (unless quiet)
     let pb = if quiet {
@@ -73,7 +75,7 @@ pub async fn execute(
 
     // Copy critical files
     let files_to_copy = get_critical_files();
-    let copied = copy_profile_files(codex_dir, &profile_dir, files_to_copy)
+    let copied = copy_profile_files(codex_dir, &staging_dir, files_to_copy)
         .with_context(|| "Failed to copy profile files")?;
 
     // Handle passphrase
@@ -82,7 +84,7 @@ pub async fn execute(
 
     // Encrypt auth.json in-place only, preserving file permissions.
     if let Some(pass) = secret_passphrase.as_ref() {
-        let auth_path = profile_dir.join("auth.json");
+        let auth_path = staging_dir.join("auth.json");
         if auth_path.exists() && auth_path.is_file() {
             let auth_content = tokio::fs::read(&auth_path)
                 .await
@@ -101,9 +103,11 @@ pub async fn execute(
     meta.update();
     let mut meta_json = serde_json::to_vec_pretty(&meta).context("Failed to serialize metadata")?;
     meta_json.push(b'\n');
-    let meta_path = profile_dir.join("profile.json");
+    let meta_path = staging_dir.join("profile.json");
     write_bytes_preserve_permissions(&meta_path, &meta_json)
         .context("Failed to write profile metadata")?;
+
+    transaction.commit()?;
 
     if let Some(bar) = pb {
         bar.finish_and_clear();

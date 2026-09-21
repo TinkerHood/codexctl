@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use colored::Colorize as _;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use tokio::process::Command;
 
 pub async fn execute(
@@ -14,7 +14,7 @@ pub async fn execute(
     passphrase: Option<String>,
     command: Vec<String>,
     quiet: bool,
-) -> Result<()> {
+) -> Result<ExitStatus> {
     let profile_name = ProfileName::try_from(profile.as_str())
         .with_context(|| format!("Invalid profile name '{profile}'"))?;
     let profile_dir = config.profile_path_validated(&profile_name)?;
@@ -57,15 +57,9 @@ pub async fn execute(
         .with_context(|| format!("Failed to execute command: {cmd}"));
 
     // Always restore original auth after command execution.
-    if let Err(e) = restore_original_auth(codex_dir, original_auth).await
-        && !quiet
-    {
-        eprintln!(
-            "{} Warning: Could not fully restore original auth: {}",
-            "⚠".yellow(),
-            e
-        );
-    }
+    restore_original_auth(codex_dir, original_auth)
+        .await
+        .context("Could not restore original auth after command execution")?;
     let status = status_result?;
 
     if !quiet {
@@ -83,7 +77,7 @@ pub async fn execute(
         }
     }
 
-    Ok(())
+    Ok(status)
 }
 
 async fn load_profile_auth(
