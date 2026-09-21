@@ -14,7 +14,7 @@
   },
   "homepage": "https://github.com/TinkerHood/codexctl",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "bin": {
     "codexctl": "./codexctl.js"

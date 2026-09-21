@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Updated the Rust directory, encoding, and Unix process dependencies, refreshed the compatible Cargo lockfile, and raised the Docker builder to Rust 1.98.1.
-- Raised the npm wrapper's supported Node.js floor to 22, expanded launcher CI coverage to Node.js 22 and 24 across the supported operating systems, and updated the pnpm setup action to v3.
+- Raised the npm wrapper's supported Node.js floor to 24 and aligned launcher CI across the supported operating systems with Node.js 24 only; updated the pnpm setup action to v3.
 
 ## [0.10.1] - 2026-09-21
 

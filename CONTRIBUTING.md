@@ -7,7 +7,7 @@ Thanks for contributing to Codex Controller (`codexctl`).
 Prerequisites:
 
 - Rust stable (`rustup`)
-- Node.js 22+ (for npm wrapper updates)
+- Node.js 24+ (for npm wrapper updates)
 
 Clone and validate locally:
 
