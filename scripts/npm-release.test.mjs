@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const script = resolve(import.meta.dirname, 'npm-release.mjs');
 function run(mode, status, published = {}, dependencies = {}) {
@@ -16,10 +17,13 @@ function run(mode, status, published = {}, dependencies = {}) {
       optionalDependencies: dependencies,
     }));
     const mock = join(cwd, 'mock.mjs');
-    writeFileSync(mock, `globalThis.fetch = async () => new Response(${JSON.stringify(JSON.stringify(published))}, {status: ${status}});`);
-    return spawnSync(process.execPath, ['--import', mock, script, mode, 'npm'], {
+    writeFileSync(mock, 'globalThis.fetch = async () => new Response(process.env.TEST_REGISTRY_BODY, {status: Number(process.env.TEST_REGISTRY_STATUS)});');
+    return spawnSync(process.execPath, ['--import', pathToFileURL(mock).href, script, mode, 'npm'], {
       cwd, encoding: 'utf8',
-      env: { ...process.env, VERSION: '0.10.1', GITHUB_REPOSITORY: 'TinkerHood/codexctl', GITHUB_OUTPUT: '' },
+      env: {
+        ...process.env, VERSION: '0.10.1', GITHUB_REPOSITORY: 'TinkerHood/codexctl', GITHUB_OUTPUT: '',
+        TEST_REGISTRY_BODY: JSON.stringify(published), TEST_REGISTRY_STATUS: String(status),
+      },
     });
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 }

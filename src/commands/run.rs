@@ -240,6 +240,12 @@ async fn wait_for_unix_child(
                         }
                     }
                     WaitStatus::Continued(_) | WaitStatus::StillAlive => {}
+                    #[cfg(any(target_os = "linux", target_os = "android"))]
+                    WaitStatus::PtraceEvent(_, _, _) | WaitStatus::PtraceSyscall(_) => {
+                        // No tracer is expected for a command we launched. Stop
+                        // its group and retain recovery state if one appears.
+                        break (Err(anyhow::anyhow!("Unexpected traced command status")), false);
+                    }
                 }
             },
             _ = interrupt.recv() => {
