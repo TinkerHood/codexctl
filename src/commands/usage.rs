@@ -129,7 +129,7 @@ async fn fetch_realtime_quota(
 fn display_realtime_quota(quota: &crate::utils::api::RealTimeQuota) {
     println!(
         "\n{}",
-        "📈 Real-Time API Quota (separate from ChatGPT/Codex plans)"
+        "📈 Legacy API billing estimate (unverified; separate from ChatGPT/Codex plans)"
             .bold()
             .cyan()
     );

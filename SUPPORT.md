@@ -19,4 +19,4 @@ Please include:
 
 Do not report security issues in public issues.
 Use private disclosure:
-https://github.com/repohelper/codexctl/security/advisories/new
+https://github.com/TinkerHood/codexctl/security/advisories/new

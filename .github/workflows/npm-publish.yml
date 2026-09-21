@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (without leading v). If omitted, uses Cargo.toml version."
+        description: 'Existing release version (without v); defaults to Cargo.toml.'
         required: false
         type: string
 
@@ -15,35 +15,35 @@ permissions:
   id-token: write
 
 concurrency:
-  group: npm-publish-${{ github.event_name }}-${{ github.event.release.tag_name || github.ref_name }}
+  group: npm-publish
+  queue: max
   cancel-in-progress: false
 
 jobs:
   get-version:
-    name: Resolve version
+    name: Resolve release
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
-      - name: Resolve version from release tag, workflow input, or Cargo.toml
+      - name: Resolve version and require a published release
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION=$(grep '^version = ' Cargo.toml | head -n 1 | sed 's/version = "//;s/"//' | tr -d ' ')
+          VERSION="${RELEASE_TAG#v}"
+          if [ -z "$VERSION" ]; then VERSION="$INPUT_VERSION"; fi
+          if [ -z "$VERSION" ]; then
+            VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           fi
-
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
-            echo "Invalid version resolved: $VERSION"
-            exit 1
-          fi
-
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected a stable release version'; exit 1; }
+          gh release view "v$VERSION" --json isDraft --jq 'if .isDraft then error("Release is still a draft") else . end' >/dev/null
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
   publish-platforms:
     name: Publish platform packages
@@ -52,167 +52,78 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - linux-x64
-          - linux-arm64
-          - darwin-x64
-          - darwin-arm64
-          - win32-x64
+        include:
+          - platform: linux-x64
+            asset: codexctl-x86_64-unknown-linux-gnu.tar.gz
+          - platform: linux-arm64
+            asset: codexctl-aarch64-unknown-linux-gnu.tar.gz
+          - platform: darwin-x64
+            asset: codexctl-x86_64-apple-darwin.tar.gz
+          - platform: darwin-arm64
+            asset: codexctl-aarch64-apple-darwin.tar.gz
+          - platform: win32-x64
+            asset: codexctl-x86_64-pc-windows-msvc.zip
     steps:
       - uses: actions/checkout@v7
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+        with:
+          ref: ${{ needs.get-version.outputs.tag }}
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-      
-      - name: Download release assets for version
-        run: |
-          TAG="v${{ needs.get-version.outputs.version }}"
-          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null
-
-          for i in {1..6}; do
-            if gh release download "$TAG" --repo "${{ github.repository }}" --dir artifacts; then
-              break
-            fi
-            if [ "$i" -eq 6 ]; then
-              echo "Failed to download release assets for $TAG after retries"
-              exit 1
-            fi
-            sleep 10
-          done
-
-          ls -la artifacts/
+      - uses: pnpm/setup@v1
+        with:
+          version: 12.5.1
+          install: false
+      - name: Download and verify release binary
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Extract binary
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.get-version.outputs.tag }}
+          ASSET: ${{ matrix.asset }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          mkdir -p npm-platforms/${{ matrix.platform }}/bin
-          
-          case "${{ matrix.platform }}" in
-            linux-x64)
-              tar -xzf artifacts/codexctl-x86_64-unknown-linux-gnu.tar.gz -C npm-platforms/${{ matrix.platform }}/bin
-              ;;
-            linux-arm64)
-              tar -xzf artifacts/codexctl-aarch64-unknown-linux-gnu.tar.gz -C npm-platforms/${{ matrix.platform }}/bin
-              ;;
-            darwin-x64)
-              tar -xzf artifacts/codexctl-x86_64-apple-darwin.tar.gz -C npm-platforms/${{ matrix.platform }}/bin
-              ;;
-            darwin-arm64)
-              tar -xzf artifacts/codexctl-aarch64-apple-darwin.tar.gz -C npm-platforms/${{ matrix.platform }}/bin
-              ;;
-            win32-x64)
-              unzip -o artifacts/codexctl-x86_64-pc-windows-msvc.zip -d npm-platforms/${{ matrix.platform }}/bin
-              ;;
-          esac
-          
-          ls -la npm-platforms/${{ matrix.platform }}/bin/
-      
-      - name: Update version
-        run: |
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${{ needs.get-version.outputs.version }}\"/" npm-platforms/${{ matrix.platform }}/package.json
-          cat npm-platforms/${{ matrix.platform }}/package.json
-
-      - name: Validate package repository metadata
-        run: |
-          node -e '
-            const pkg = require("./npm-platforms/${{ matrix.platform }}/package.json");
-            const expected = `github.com/${process.env.GITHUB_REPOSITORY}.git`;
-            const actual = pkg?.repository?.url || "";
-            if (!actual.includes(expected)) {
-              console.error(`repository.url mismatch for ${pkg.name}: expected to include ${expected}, got ${actual}`);
-              process.exit(1);
-            }
-            console.log(`repository.url OK for ${pkg.name}`);
-          '
-
-      - name: Check if version already exists on npm
-        id: publish_check
-        run: |
-          PKG_NAME=$(node -p "require('./npm-platforms/${{ matrix.platform }}/package.json').name")
-          PKG_VERSION="${{ needs.get-version.outputs.version }}"
-          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "${PKG_NAME}@${PKG_VERSION} is already published. Skipping."
+          gh release download "$TAG" --pattern "$ASSET" --pattern SHA256SUMS --dir artifacts
+          (cd artifacts && sha256sum --check --ignore-missing SHA256SUMS)
+          mkdir -p "npm-platforms/$PLATFORM/bin"
+          if [[ "$ASSET" == *.zip ]]; then
+            unzip -o "artifacts/$ASSET" -d "npm-platforms/$PLATFORM/bin"
           else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+            tar -xzf "artifacts/$ASSET" -C "npm-platforms/$PLATFORM/bin"
           fi
-      
-      - name: Publish to npm
-        if: steps.publish_check.outputs.publish == 'true'
-        run: |
-          cd npm-platforms/${{ matrix.platform }}
-          npm publish --access public
+      - name: Validate package and check registry
+        id: package
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: node scripts/npm-release.mjs check "npm-platforms/${{ matrix.platform }}"
+      - name: Publish platform
+        if: steps.package.outputs.publish == 'true'
+        working-directory: npm-platforms/${{ matrix.platform }}
+        run: pnpm publish --access public --provenance --no-git-checks
 
   publish-main:
     name: Publish main package
     runs-on: ubuntu-latest
-    needs: [get-version]
+    needs: [get-version, publish-platforms]
     steps:
       - uses: actions/checkout@v7
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+        with:
+          ref: ${{ needs.get-version.outputs.tag }}
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-      
-      - name: Update version
-        working-directory: ./npm
-        run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ needs.get-version.outputs.version }}';
-            for (const key of Object.keys(pkg.optionalDependencies)) {
-              pkg.optionalDependencies[key] = '^${{ needs.get-version.outputs.version }}';
-            }
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          cat package.json
-
-      - name: Validate package repository metadata
-        working-directory: ./npm
-        run: |
-          node -e '
-            const pkg = require("./package.json");
-            const expected = `github.com/${process.env.GITHUB_REPOSITORY}.git`;
-            const actual = pkg?.repository?.url || "";
-            if (!actual.includes(expected)) {
-              console.error(`repository.url mismatch for ${pkg.name}: expected to include ${expected}, got ${actual}`);
-              process.exit(1);
-            }
-            console.log(`repository.url OK for ${pkg.name}`);
-          '
-
-      - name: Check if main package version already exists on npm
-        id: publish_check
-        working-directory: ./npm
-        run: |
-          PKG_NAME=$(node -p "require('./package.json').name")
-          PKG_VERSION="${{ needs.get-version.outputs.version }}"
-          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "${PKG_NAME}@${PKG_VERSION} is already published. Skipping."
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-      
-      - name: Publish to npm
-        if: steps.publish_check.outputs.publish == 'true'
-        working-directory: ./npm
-        run: npm publish --access public
-
-  publish-success:
-    name: Notify completion
-    runs-on: ubuntu-latest
-    needs: [publish-platforms, publish-main]
-    if: always()
-    steps:
-      - run: |
-          echo "Publishing completed"
-          echo "Platform packages: ${{ needs.publish-platforms.result }}"
-          echo "Main package: ${{ needs.publish-main.result }}"
+      - uses: pnpm/setup@v1
+        with:
+          version: 12.5.1
+          install: false
+      - name: Verify every platform is available before publishing wrapper
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: node scripts/npm-release.mjs platforms
+      - name: Validate package and check registry
+        id: package
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: node scripts/npm-release.mjs check npm
+      - name: Publish wrapper
+        if: steps.package.outputs.publish == 'true'
+        working-directory: npm
+        run: pnpm publish --access public --provenance --no-git-checks

@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-21
+
 ### Changed
 
 - Removed the unused `aes-gcm` release-candidate dependency and kept profile encryption on the stable `age` stack already used by the codebase.
@@ -12,6 +14,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Recover interrupted profile replacements and temporary auth swaps on the next invocation; serialize cooperating profile/auth writers and restore auth on handled termination signals.
+- Keep repeated exports from nesting old archives and write exported credentials privately.
+- Report failed or malformed usage responses instead of claiming zero usage; label legacy billing estimates honestly.
+- Align repository metadata with TinkerHood, publish exact-version platform packages before the wrapper, and dispatch the trusted publishing workflow after release creation.
+- Incorporate pending Cargo dependency, setup-node v7, and provenance-action updates.
+- Restore workflow and JavaScript CodeQL coverage alongside Rust scanning.
 - Preserve saved profiles when replacement preparation or installation fails.
 - Clean up temporary credential writes on failure and create new files privately.
 - Give automatic backups unique names and reject unsafe or reused named backups.

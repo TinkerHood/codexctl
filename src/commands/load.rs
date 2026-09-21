@@ -1,6 +1,7 @@
 use crate::utils::auth::read_email_from_codex_dir;
 use crate::utils::config::Config;
 use crate::utils::files::{create_auth_backup, write_bytes_preserve_permissions};
+use crate::utils::transaction::DirectoryLock;
 use crate::utils::validation::ProfileName;
 use anyhow::{Context as _, Result};
 use colored::Colorize as _;
@@ -16,38 +17,83 @@ pub async fn execute(
     quiet: bool,
     passphrase: Option<String>,
 ) -> Result<()> {
-    // Handle quick-switch to previous profile
-    if name == "-" {
-        return load_previous_profile(config, force, dry_run, quiet, passphrase).await;
+    if dry_run {
+        // A dry run only reads profiles; it must not create CODEX_HOME just
+        // to hold a lock that protects writes.
+        let selected = match name.as_str() {
+            "-" => previous_profile_name(&config, quiet).await?,
+            "auto" => match auto_switch(&config, true, quiet, passphrase.as_ref()).await? {
+                Some(name) => name,
+                None => return Ok(()),
+            },
+            _ => name,
+        };
+        do_load(config, selected, force, true, quiet, passphrase).await?;
+        return Ok(());
     }
 
-    // Handle auto-switcher mode
-    if name == "auto" {
-        return auto_switch(config, force, dry_run, quiet, passphrase).await;
+    // Fail before creating CODEX_HOME for names that cannot be loaded. The
+    // selection is checked again after locking, so a concurrent change still
+    // gets the authoritative result under the lock.
+    if name != "-" && name != "auto" {
+        let validated = ProfileName::try_from(name.as_str())
+            .with_context(|| format!("Invalid profile name '{name}'"))?;
+        if !config.profile_path_validated(&validated)?.exists() {
+            anyhow::bail!(
+                "Profile '{name}' not found. Use 'codexctl list' to see available profiles."
+            );
+        }
+    } else if name == "-" && !config.profiles_dir().join(".previous_profile").exists() {
+        anyhow::bail!(
+            "No previous profile. Switch to a profile first before using 'codexctl load -'"
+        );
+    } else if name == "auto" && !config.profiles_dir().exists() {
+        anyhow::bail!(
+            "No profiles directory found. Create profiles first with: codexctl save <name>"
+        );
     }
 
-    // Store current profile name before switching (for later "-" support)
+    // Selection, the auth swap, and both tracking markers form one locked operation.
+    let _auth_lock = DirectoryLock::acquire(config.codex_dir(), ".codexctl_auth.lock")?;
+    crate::commands::run::recover_interrupted_run_locked(config.codex_dir())?;
+
+    let selected = match name.as_str() {
+        "-" => previous_profile_name(&config, quiet).await?,
+        "auto" => match auto_switch(&config, dry_run, quiet, passphrase.as_ref()).await? {
+            Some(name) => name,
+            None => return Ok(()),
+        },
+        _ => name,
+    };
     let current_profile = get_current_profile_name(&config).await;
 
-    let result = do_load(
+    let switched = do_load(
         config.clone(),
-        name.clone(),
+        selected.clone(),
         force,
         dry_run,
         quiet,
         passphrase,
     )
-    .await;
+    .await?;
 
-    // If successful, save profile tracking info
-    if result.is_ok() && !dry_run {
-        if let Some(prev) = current_profile {
-            let _ = save_previous_profile(&config, &prev).await;
-        }
-        let _ = save_current_profile(&config, &name).await;
+    record_switch_if_applied(&config, current_profile.as_deref(), &selected, switched).await;
+    Ok(())
+}
+
+async fn record_switch_if_applied(
+    config: &Config,
+    previous: Option<&str>,
+    selected: &str,
+    switched: bool,
+) {
+    if !switched {
+        return;
     }
-
-    result
+    if let Some(previous) = previous {
+        let _ = save_previous_profile(config, previous).await;
+    }
+    let _ = save_current_profile(config, selected).await;
 }
 
 /// Internal load implementation
@@ -59,7 +105,7 @@ async fn do_load(
     dry_run: bool,
     quiet: bool,
     passphrase: Option<String>,
-) -> Result<()> {
+) -> Result<bool> {
     let profile_name = ProfileName::try_from(name.as_str())
         .with_context(|| format!("Invalid profile name '{name}'"))?;
     let profile_dir = config.profile_path_validated(&profile_name)?;
@@ -100,7 +146,7 @@ async fn do_load(
                 codex_dir.display()
             );
         }
-        return Ok(());
+        return Ok(false);
     }
 
     if !force && codex_dir.exists() && !quiet {
@@ -121,7 +167,7 @@ async fn do_load(
 
             if !confirm {
                 println!("Cancelled");
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -212,18 +258,17 @@ async fn do_load(
         );
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Auto-switch to the best available profile based on quota/usage
 #[allow(clippy::too_many_lines)]
 async fn auto_switch(
-    config: Config,
-    force: bool,
+    config: &Config,
     dry_run: bool,
     quiet: bool,
-    passphrase: Option<String>,
-) -> Result<()> {
+    passphrase: Option<&String>,
+) -> Result<Option<String>> {
     use crate::utils::auth::extract_usage_info;
 
     let profiles_dir = config.profiles_dir();
@@ -257,7 +302,7 @@ async fn auto_switch(
             continue;
         }
 
-        let auth_json = read_profile_auth_json(&auth_path, passphrase.as_ref()).await;
+        let auth_json = read_profile_auth_json(&auth_path, passphrase).await;
 
         if let Some(auth) = auth_json
             && let Ok(usage) = extract_usage_info(&auth)
@@ -307,7 +352,7 @@ async fn auto_switch(
         if !quiet {
             println!("{} Would auto-switch to: {}", "ℹ".blue(), best_name.cyan());
         }
-        return Ok(());
+        return Ok(None);
     }
 
     let codex_dir = config.codex_dir();
@@ -322,7 +367,7 @@ async fn auto_switch(
                 best_usage.email.green()
             );
         }
-        return Ok(());
+        return Ok(None);
     }
 
     if !quiet {
@@ -334,15 +379,7 @@ async fn auto_switch(
         );
     }
 
-    Box::pin(execute(
-        config,
-        best_name.clone(),
-        force,
-        false,
-        quiet,
-        passphrase,
-    ))
-    .await
+    Ok(Some(best_name.clone()))
 }
 
 /// Read `auth.json` from a profile, decrypting when needed.
@@ -450,13 +487,7 @@ async fn save_current_profile(config: &Config, name: &str) -> anyhow::Result<()>
 }
 
 /// Load the previous profile (quick-switch with `-`)
-async fn load_previous_profile(
-    config: Config,
-    force: bool,
-    dry_run: bool,
-    quiet: bool,
-    passphrase: Option<String>,
-) -> Result<()> {
+async fn previous_profile_name(config: &Config, quiet: bool) -> Result<String> {
     let marker = config.profiles_dir().join(".previous_profile");
 
     if !marker.exists() {
@@ -480,13 +511,85 @@ async fn load_previous_profile(
         );
     }
 
-    Box::pin(execute(
-        config,
-        previous_name.to_string(),
-        force,
-        dry_run,
-        quiet,
-        passphrase,
-    ))
-    .await
+    Ok(previous_name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dry_run_and_invalid_profile_do_not_create_codex_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex_dir = dir.path().join("codex-home");
+        let config = Config::for_test(dir.path().join("profiles"), codex_dir.clone()).unwrap();
+        std::fs::create_dir(config.profiles_dir().join("ready")).unwrap();
+
+        execute(config.clone(), "ready".into(), false, true, true, None)
+            .await
+            .unwrap();
+        assert!(!codex_dir.exists());
+
+        assert!(
+            execute(
+                config.clone(),
+                "invalid/name".into(),
+                false,
+                false,
+                true,
+                None
+            )
+            .await
+            .is_err()
+        );
+        assert!(!codex_dir.exists());
+
+        assert!(
+            execute(config, "missing".into(), false, false, true, None)
+                .await
+                .is_err()
+        );
+        assert!(!codex_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn no_op_load_keeps_both_tracking_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::new(Some(dir.path().to_path_buf())).unwrap();
+        tokio::fs::write(dir.path().join(".current_profile"), "current")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join(".previous_profile"), "previous")
+            .await
+            .unwrap();
+
+        record_switch_if_applied(&config, Some("current"), "canceled", false).await;
+
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join(".current_profile"))
+                .await
+                .unwrap(),
+            "current"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join(".previous_profile"))
+                .await
+                .unwrap(),
+            "previous"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_load_records_previous_and_current_under_one_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::new(Some(dir.path().to_path_buf())).unwrap();
+        record_switch_if_applied(&config, Some("first"), "second", true).await;
+        assert_eq!(previous_profile_name(&config, true).await.unwrap(), "first");
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join(".current_profile"))
+                .await
+                .unwrap(),
+            "second"
+        );
+    }
 }

@@ -1,18 +1,18 @@
 {
   "name": "@codexctl/linux-arm64",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "The Linux ARM64 binary for codexctl",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/repohelper/codexctl.git"
+    "url": "git+https://github.com/TinkerHood/codexctl.git"
   },
   "keywords": ["codexctl", "cli", "ai", "profile-manager"],
   "author": "Bhanu Korthiwada",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/repohelper/codexctl/issues"
+    "url": "https://github.com/TinkerHood/codexctl/issues"
   },
-  "homepage": "https://github.com/repohelper/codexctl",
+  "homepage": "https://github.com/TinkerHood/codexctl",
   "os": ["linux"],
   "cpu": ["arm64"],
   "bin": {

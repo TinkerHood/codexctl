@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability report
-    url: https://github.com/repohelper/codexctl/security/advisories/new
+    url: https://github.com/TinkerHood/codexctl/security/advisories/new
     about: Report security issues privately

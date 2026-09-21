@@ -1,10 +1,10 @@
-//! `OpenAI` API client for fetching real-time quota information
+//! `OpenAI` legacy billing API client for an unverified quota estimate.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Real-time quota information from `OpenAI` API
+/// Estimated quota from legacy `OpenAI` billing endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealTimeQuota {
     pub account_id: String,
@@ -39,7 +39,7 @@ impl RealTimeQuota {
     }
 }
 
-/// Fetch real-time quota from `OpenAI` API
+/// Fetch a legacy billing estimate; the endpoint's units are not officially documented.
 pub async fn fetch_quota(api_key: &str) -> Result<RealTimeQuota> {
     let client = reqwest::Client::new();
 
@@ -61,6 +61,12 @@ pub async fn fetch_quota(api_key: &str) -> Result<RealTimeQuota> {
         .await
         .context("Failed to parse OpenAI API response")?;
 
+    build_quota(&data, fetch_usage(api_key).await)
+}
+
+fn build_quota(data: &Value, usage: Result<u64>) -> Result<RealTimeQuota> {
+    let usage = usage.context("Failed to fetch current month's usage")?;
+
     // Parse the response
     let account_id = data
         .get("account_id")
@@ -74,15 +80,13 @@ pub async fn fetch_quota(api_key: &str) -> Result<RealTimeQuota> {
         .unwrap_or("unknown")
         .to_string();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let quota_limit = data
         .get("hard_limit_usd")
         .and_then(Value::as_f64)
-        .map(|v| (v * 100.0) as u64)
-        .unwrap_or(0);
+        .context("Subscription response missing numeric hard_limit_usd")?;
+    let quota_limit = amount_to_cents(quota_limit)
+        .context("Subscription response hard_limit_usd is out of range")?;
 
-    // Fetch usage data
-    let usage = fetch_usage(api_key).await.unwrap_or(0);
     let remaining = quota_limit.saturating_sub(usage);
     #[allow(clippy::cast_precision_loss)]
     let percent_used = if quota_limit > 0 {
@@ -139,14 +143,27 @@ async fn fetch_usage(api_key: &str) -> Result<u64> {
         .await
         .context("Failed to parse usage response")?;
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    parse_total_usage(&data)
+}
+
+fn parse_total_usage(data: &Value) -> Result<u64> {
     let total_usage = data
         .get("total_usage")
         .and_then(Value::as_f64)
-        .map(|v| (v * 100.0) as u64) // Convert to cents
-        .unwrap_or(0);
+        .context("Usage response missing numeric total_usage")?;
 
-    Ok(total_usage)
+    // Preserve the existing conversion until the legacy usage endpoint's
+    // unit can be established from an official contract.
+    amount_to_cents(total_usage).context("Usage response total_usage is out of range")
+}
+
+fn amount_to_cents(value: f64) -> Result<u64> {
+    let cents = value * 100.0;
+    if !value.is_finite() || value < 0.0 || !cents.is_finite() || cents >= u64::MAX as f64 {
+        anyhow::bail!("Amount must be finite, nonnegative, and fit in u64 cents");
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(cents as u64)
 }
 
 /// Extract API key from auth.json
@@ -198,5 +215,53 @@ mod tests {
         });
 
         assert_eq!(extract_api_key(&auth), Some("sk-token456".to_string()));
+    }
+
+    #[test]
+    fn failed_usage_does_not_become_zero_quota() {
+        let subscription = serde_json::json!({"hard_limit_usd": 100.0});
+        let error =
+            build_quota(&subscription, Err(anyhow::anyhow!("usage unavailable"))).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to fetch current month's usage")
+        );
+        assert_eq!(error.root_cause().to_string(), "usage unavailable");
+
+        let quota = build_quota(&subscription, Ok(0)).unwrap();
+        assert_eq!(quota.usage_this_month, 0);
+        assert_eq!(quota.remaining_quota, 10_000);
+    }
+
+    #[test]
+    fn missing_usage_value_is_an_error() {
+        assert!(parse_total_usage(&serde_json::json!({})).is_err());
+        assert!(parse_total_usage(&serde_json::json!({"total_usage": "unknown"})).is_err());
+        assert_eq!(
+            parse_total_usage(&serde_json::json!({"total_usage": 1.5})).unwrap(),
+            150
+        );
+        assert!(parse_total_usage(&serde_json::json!({"total_usage": -1.0})).is_err());
+        assert!(parse_total_usage(&serde_json::json!({"total_usage": 1e20})).is_err());
+        assert!(amount_to_cents(f64::NAN).is_err());
+        assert!(amount_to_cents(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn subscription_limit_must_be_valid_or_exactly_zero() {
+        for data in [
+            serde_json::json!({}),
+            serde_json::json!({"hard_limit_usd": "unknown"}),
+            serde_json::json!({"hard_limit_usd": -1.0}),
+            serde_json::json!({"hard_limit_usd": 1e20}),
+        ] {
+            let error = build_quota(&data, Ok(0)).unwrap_err();
+            assert!(format!("{error:#}").contains("hard_limit_usd"));
+        }
+
+        let quota = build_quota(&serde_json::json!({"hard_limit_usd": 0.0}), Ok(0)).unwrap();
+        assert_eq!(quota.quota_limit, 0);
+        assert_eq!(quota.remaining_quota, 0);
     }
 }

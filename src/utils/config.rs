@@ -42,6 +42,17 @@ pub struct Config {
 }
 
 impl Config {
+    #[cfg(test)]
+    pub(crate) fn for_test(profiles_dir: PathBuf, codex_dir: PathBuf) -> Result<Self> {
+        let backup_dir = profiles_dir.join("backups");
+        std::fs::create_dir_all(&backup_dir)?;
+        Ok(Self {
+            profiles_dir,
+            codex_dir,
+            backup_dir,
+        })
+    }
+
     /// Create a new configuration
     ///
     /// # Errors

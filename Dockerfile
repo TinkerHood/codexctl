@@ -27,7 +27,6 @@ FROM debian:bookworm-slim
 
 LABEL maintainer="Bhanu Korthiwada"
 LABEL description="Codex Controller for Codex CLI profile management"
-LABEL version="0.7.0"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

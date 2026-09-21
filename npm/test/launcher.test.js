@@ -13,14 +13,16 @@ const source = fs.readFileSync(path.join(__dirname, '../codexctl.js'), 'utf8');
 
 function launch({ platform = 'linux', arch = 'x64', resolve = () => '/binary' } = {}) {
   const child = new EventEmitter();
+  child.pid = 456;
   const errors = [];
-  const result = { child, errors };
-  const process = {
+  const result = { child, errors, forwarded: [] };
+  child.kill = (signal) => { result.forwarded.push(signal); return true; };
+  const process = Object.assign(new EventEmitter(), {
     argv: ['node', 'codexctl', '--version'],
     pid: 123,
     exit(code) { result.exit = code; throw new Error('exit'); },
     kill(pid, signal) { result.signal = { pid, signal }; },
-  };
+  });
   const require = (name) => {
     if (name === 'os') return { platform: () => platform, arch: () => arch };
     if (name === 'child_process') return {
@@ -96,4 +98,19 @@ test('preserves signal termination instead of reporting success', () => {
   const result = launch();
   result.child.emit('exit', null, 'SIGTERM');
   assert.deepEqual(result.signal, { pid: 123, signal: 'SIGTERM' });
+});
+
+test('forwards Unix signals and waits for the child exit', () => {
+  const result = launch();
+  result.process.emit('SIGTERM');
+  assert.deepEqual(result.forwarded, ['SIGTERM']);
+  assert.equal(result.process.exitCode, undefined);
+  result.child.emit('exit', 137, null);
+  assert.equal(result.process.exitCode, 137);
+  assert.equal(result.process.listenerCount('SIGTERM'), 0);
+});
+
+test('keeps Windows launcher signal behavior unchanged', () => {
+  const result = launch({ platform: 'win32' });
+  assert.equal(result.process.listenerCount('SIGTERM'), 0);
 });

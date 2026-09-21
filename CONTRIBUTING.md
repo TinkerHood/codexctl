@@ -15,7 +15,7 @@ Clone and validate locally:
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features --all-targets
-pnpm --dir npm exec node --test test/launcher.test.js
+pnpm exec node --test npm/test/launcher.test.js scripts/npm-release.test.mjs
 cargo build --release --locked
 ```
 
@@ -47,4 +47,4 @@ Before opening a PR:
 ## Security Contributions
 
 For security-sensitive issues, use private disclosure:
-https://github.com/repohelper/codexctl/security/advisories/new
+https://github.com/TinkerHood/codexctl/security/advisories/new

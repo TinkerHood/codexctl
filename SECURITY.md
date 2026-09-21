@@ -14,7 +14,7 @@ Security fixes are currently prioritized for the latest `main` branch and the mo
 Please do not open public issues for security reports.
 
 1. Open a private security advisory in GitHub:
-   https://github.com/repohelper/codexctl/security/advisories/new
+   https://github.com/TinkerHood/codexctl/security/advisories/new
 2. Include:
    - affected version
    - reproduction steps

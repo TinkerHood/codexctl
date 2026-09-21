@@ -53,12 +53,29 @@ const child = spawn(binaryPath, process.argv.slice(2), {
   windowsHide: true 
 });
 
+// An explicit signal to the Node launcher does not automatically reach its
+// Rust child. Keep the launcher alive until the child has restored auth.
+const forwardedSignals = isWindows ? [] : ['SIGINT', 'SIGTERM'];
+const forwardSignal = new Map(forwardedSignals.map((signal) => [signal, () => {
+  if (child.pid) child.kill(signal);
+}]));
+for (const signal of forwardedSignals) {
+  process.on(signal, forwardSignal.get(signal));
+}
+const removeSignalForwarding = () => {
+  for (const signal of forwardedSignals) {
+    process.removeListener(signal, forwardSignal.get(signal));
+  }
+};
+
 child.on('error', (error) => {
+  removeSignalForwarding();
   console.error(`Failed to start codexctl: ${error.message}`);
   process.exitCode = 1;
 });
 
 child.on('exit', (code, signal) => {
+  removeSignalForwarding();
   if (signal) {
     process.kill(process.pid, signal);
   } else {

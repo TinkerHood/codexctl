@@ -1,6 +1,6 @@
 # Codex Controller (`codexctl`)
 
-[![CI](https://github.com/repohelper/codexctl/actions/workflows/ci.yml/badge.svg)](https://github.com/repohelper/codexctl/actions)
+[![CI](https://github.com/TinkerHood/codexctl/actions/workflows/ci.yml/badge.svg)](https://github.com/TinkerHood/codexctl/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust Version](https://img.shields.io/badge/rust-1.94%2B-blue.svg)](https://www.rust-lang.org)
 
@@ -8,9 +8,9 @@
 
 **Prerequisite**: Requires [@openai/codex](https://www.npmjs.com/package/@openai/codex) to be installed first.
 
-**Version**: 0.10.0 | **Author**: [Bhanu Korthiwada](https://github.com/BhanuKorthiwada)
+**Version**: 0.10.1 | **Author**: [Bhanu Korthiwada](https://github.com/BhanuKorthiwada)
 
-🔗 **Website**: [codexctl on GitHub](https://github.com/repohelper/codexctl)  
+🔗 **Website**: [codexctl on GitHub](https://github.com/TinkerHood/codexctl)
 📖 **Documentation**: See README for usage
 
 ---
@@ -31,7 +31,7 @@ Use it when you need to:
 - ⚡ **Switch instantly** between accounts without re-authenticating
 - 🤖 **Auto-switch** based on quota availability
 - 📊 **Monitor usage** across all your Codex accounts
-- 🌳 **Use concurrently** - different accounts in different terminals
+- 🌳 **Select saved accounts** - run a command with a chosen profile
 
 ---
 
@@ -59,7 +59,7 @@ Use it when you need to:
 
 ### Automation & Control
 - 🤖 **Auto-Switcher** - Automatically pick best profile based on quota
-- 📊 **Usage Monitoring** - Real-time quota and billing data
+- 📊 **Usage Monitoring** - Profile claims and optional legacy API billing estimates
 - ✅ **Verify** - Validate all profiles' authentication status
 - 🌳 **Concurrent Sessions** - Use multiple accounts in parallel
 - 🏃 **CI/CD Integration** - Run with specific credentials in pipelines
@@ -81,7 +81,7 @@ First, install Codex CLI:
 
 ```bash
 # Install Codex CLI (required)
-npm install -g @openai/codex
+pnpm add -g @openai/codex
 
 # Verify installation
 codex --version
@@ -94,13 +94,11 @@ codex --version
 cargo install codexctl
 
 # Or via npm
-npm install -g codexctl
+pnpm add -g codexctl
 
 # Or download binary from GitHub Releases
-curl -fsSL https://github.com/repohelper/codexctl/releases
+curl -fsSL https://github.com/TinkerHood/codexctl/releases
 
-# Or via Homebrew (macOS/Linux)
-brew install repohelper/tap/codexctl
 ```
 
 ### First Steps
@@ -138,7 +136,7 @@ codexctl verify                   Verify all profiles' authentication status
 codexctl backup                   Create a backup of current profile
 codexctl run --profile <name> -- <cmd>
                                   Run a command with a specific profile
-codexctl env <name>               Export shell commands for concurrent usage
+codexctl env <name>               Export profile selection variables
 codexctl diff <name1> <name2>     Compare/diff two profiles
 codexctl switch                   Switch to a profile interactively (fzf)
 codexctl history                  View command history
@@ -172,6 +170,11 @@ codexctl run --profile work --passphrase "my-secret" -- codex --version
 
 ## Usage And Auto-Switching
 
+The optional `--realtime` view uses legacy OpenAI billing endpoints and is an
+unverified estimate, not authoritative account quota. Failed or malformed usage
+responses are reported as errors. `load auto` ranks saved plan claims; it does
+not measure current remaining quota.
+
 Inspect usage directly or let the controller pick the best available profile:
 
 ```bash
@@ -184,15 +187,15 @@ codexctl usage --json
 # Compare usage across all saved profiles
 codexctl usage --all
 
-# Switch to the profile with the best remaining quota
+# Select a profile using saved plan claims
 codexctl load auto
 ```
 
 ---
 
-## Concurrent Usage
+## Profile Environment And One-Shot Commands
 
-Run different Codex identities in separate terminals:
+Print profile environment variables or run a command with temporary authentication:
 
 ```bash
 # Print shell exports for a profile
@@ -204,6 +207,8 @@ eval "$(codexctl env work)"
 # Run one command against a specific profile and restore after
 codexctl run --profile work -- codex --version
 ```
+
+`codexctl env` emits codexctl-specific variables; it does not provide isolated Codex sessions. `load` and `run` use the shared Codex auth file, so use one active identity at a time.
 
 `codexctl load` and `codexctl run` only swap the live `auth.json`. Existing local sessions, history, memories, and state stay untouched. The automatic backup created during `load` now captures the live `auth.json` only, matching the actual mutation surface.
 
@@ -236,9 +241,9 @@ source <(codexctl completions bash --print)
 ```bash
 # Run with Docker
 docker run -it --rm \
-  -v ~/.codexctl:/home/codexctl/.config/codexctl \
+  -v ~/.codexctl:/home/codexctl/.local/share/codexctl \
   -v ~/.codex:/home/codexctl/.codex \
-  ghcr.io/repohelper/codexctl list
+  ghcr.io/tinkerhood/codexctl list
 ```
 
 ---
@@ -260,12 +265,24 @@ controls quiet output. There is no `codexctl` configuration-file parser.
 Profile names cannot use internal names (`backups`, dot-prefixed names) or
 command aliases (`auto`, `-`). Save and import prepare replacements before
 replacing an existing profile. Named backups refuse an existing destination;
-automatic backups receive unique names.
+automatic backups receive unique names. Exports are written under the private `.exports` directory in the profiles
+directory as `.exports/<name>.export.txt`; prior export files are excluded from archives.
 
 `codexctl run` restores auth after the child exits, propagates its exit code, and
-reports restoration failures even in quiet mode. Abrupt termination of
-`codexctl` itself and simultaneous writers to the same auth file are not covered
-by this restoration guarantee.
+reports restoration failures even in quiet mode. Auth changes are guarded by a
+process lock. After a forced process stop, the next codexctl invocation recovers
+the saved auth when it is safe to do so; unrelated external auth changes are
+retained and reported for manual recovery. Profile replacement also retains a
+recoverable original across process interruption. These locks coordinate
+codexctl processes, not external Codex clients. Keep recovery files until any
+reported conflict is resolved.
+
+On Unix, `run` stops its command process group before restoring auth, including
+shell descendants, and passes foreground terminal input to interactive commands.
+Commands that deliberately detach into another process group are outside this
+cleanup. Windows signal handling stops the immediate child only. Killing codexctl
+with SIGKILL cannot run cleanup immediately; stop any surviving command before
+invoking codexctl to recover the saved auth.
 
 ---
 

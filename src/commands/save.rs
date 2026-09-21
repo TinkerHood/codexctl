@@ -4,6 +4,7 @@ use crate::utils::files::{
     copy_profile_files, get_critical_files, write_bytes_preserve_permissions,
 };
 use crate::utils::profile::ProfileMeta;
+use crate::utils::transaction::DirectoryLock;
 use crate::utils::transaction::ProfileTransaction;
 use crate::utils::validation::ProfileName;
 use anyhow::{Context as _, Result};
@@ -31,10 +32,14 @@ pub async fn execute(
         );
     }
 
+    let _auth_lock = DirectoryLock::acquire(codex_dir, ".codexctl_auth.lock")?;
+    crate::commands::run::recover_interrupted_run_locked(codex_dir)?;
+
     if !codex_dir.join("auth.json").is_file() {
         anyhow::bail!("Codex directory does not contain auth.json; existing profile preserved");
     }
 
+    let transaction = ProfileTransaction::new(&profile_dir)?;
     if profile_dir.exists() && !force {
         let confirm = dialoguer::Confirm::new()
             .with_prompt(format!(
@@ -51,7 +56,6 @@ pub async fn execute(
             return Ok(());
         }
     }
-    let transaction = ProfileTransaction::new(&profile_dir)?;
     let staging_dir = transaction.staging_dir();
 
     // Create progress bar with modern styling (unless quiet)

@@ -10,6 +10,7 @@ pub async fn execute(config: Config, name: String, data: String, quiet: bool) ->
     let profile_name = ProfileName::try_from(name.as_str())
         .with_context(|| format!("Invalid profile name '{name}'"))?;
     let profile_dir = config.profile_path_validated(&profile_name)?;
+    let transaction = ProfileTransaction::new(&profile_dir)?;
 
     if profile_dir.exists() {
         let confirm = dialoguer::Confirm::new()
@@ -28,7 +29,7 @@ pub async fn execute(config: Config, name: String, data: String, quiet: bool) ->
         }
     }
 
-    import_profile(&data, &profile_dir).await?;
+    import_into_transaction(&data, transaction).await?;
 
     if !quiet {
         println!(
@@ -42,7 +43,12 @@ pub async fn execute(config: Config, name: String, data: String, quiet: bool) ->
     Ok(())
 }
 
+#[cfg(test)]
 async fn import_profile(data: &str, profile_dir: &Path) -> Result<()> {
+    import_into_transaction(data, ProfileTransaction::new(profile_dir)?).await
+}
+
+async fn import_into_transaction(data: &str, transaction: ProfileTransaction) -> Result<()> {
     // Decode and extract completely before replacing an existing profile.
     let decoded = STANDARD
         .decode(data)
@@ -52,7 +58,6 @@ async fn import_profile(data: &str, profile_dir: &Path) -> Result<()> {
     let decompressed = decompress(&decoded)?;
 
     // Parse as tarball and extract
-    let transaction = ProfileTransaction::new(profile_dir)?;
     extract_tarball(&decompressed, &transaction.staging_dir()).await?;
     let auth_path = transaction.staging_dir().join("auth.json");
     let auth = std::fs::symlink_metadata(&auth_path)
@@ -109,6 +114,23 @@ mod tests {
     use std::io::Write as _;
 
     #[tokio::test]
+    async fn import_rejects_active_profile_writer_before_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::new(Some(dir.path().to_path_buf())).unwrap();
+        let _writer = crate::utils::transaction::DirectoryLock::acquire(
+            dir.path(),
+            ".codexctl_profiles.lock",
+        )
+        .unwrap();
+
+        let error = execute(config, "work".to_string(), String::new(), true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Another codexctl operation"));
+        assert!(!dir.path().join("work").exists());
+    }
+
+    #[tokio::test]
     async fn invalid_import_preserves_existing_profile() {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join("work");
@@ -133,7 +155,7 @@ mod tests {
                 std::fs::read(profile.join("auth.json")).unwrap(),
                 b"original"
             );
-            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+            assert!(!dir.path().join(".codexctl_original_work").exists());
         }
     }
 }

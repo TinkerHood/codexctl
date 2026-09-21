@@ -5,12 +5,12 @@ Codex Controller for Codex CLI. The first end-to-end slice is profile management
 ## Installation
 
 ```bash
-npm install -g codexctl
+pnpm add -g codexctl
 ```
 
-Or use npx (no install):
+Or run without a global install:
 ```bash
-npx codexctl --help
+pnpm dlx codexctl --help
 ```
 
 ## Quick Start

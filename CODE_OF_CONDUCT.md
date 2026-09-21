@@ -31,7 +31,7 @@ This Code of Conduct applies within project spaces and in public spaces when an 
 ## Reporting
 
 To report unacceptable behavior, contact maintainers via private security/advisory channel:
-https://github.com/repohelper/codexctl/security/advisories/new
+https://github.com/TinkerHood/codexctl/security/advisories/new
 
 ## Attribution
 

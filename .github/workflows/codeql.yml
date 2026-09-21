@@ -15,12 +15,12 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (Rust)
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        language: [rust]
+        language: [rust, actions, javascript-typescript]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -31,7 +31,10 @@ jobs:
           languages: ${{ matrix.language }}
 
       - name: Build
+        if: matrix.language == 'rust'
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

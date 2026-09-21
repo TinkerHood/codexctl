@@ -259,6 +259,10 @@ async fn main() -> Result<()> {
 
     let config = Config::new(cli.config_dir.clone())?;
 
+    // Complete recoverable replacements before commands inspect profile or auth paths.
+    utils::transaction::recover_profiles(config.profiles_dir())?;
+    run::recover_interrupted_run(config.codex_dir())?;
+
     // Auto-migrate profiles on startup (silent, no user intervention)
     if let Err(e) = crate::utils::migrate::auto_migrate(&config).await {
         tracing::warn!("Auto-migration warning: {}", e);

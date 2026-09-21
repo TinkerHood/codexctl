@@ -9,7 +9,7 @@ echo "Running pre-commit checks..."
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-features --all-targets
-pnpm --dir npm exec node --test test/launcher.test.js
+pnpm exec node --test npm/test/launcher.test.js scripts/npm-release.test.mjs
 
 echo "Pre-commit checks passed."
 exit 0
